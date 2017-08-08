@@ -1,0 +1,1 @@
+initSidebarItems({"enum":[["Error","Contract call/query error."]],"mod":[["tokens","Contract Functions Output types."]],"struct":[["Contract","Ethereum Contract Interface"],["Options","Contract Call/Query Options"]]});

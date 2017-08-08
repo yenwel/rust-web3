@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["FetchTask","Future which will represents a task to fetch data. Will execute synchronously when first polled."],["Http","HTTP Transport (synchronous)"]]});
