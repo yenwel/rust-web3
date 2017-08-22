@@ -1,8 +1,11 @@
 //! IPC Transport for *nix
-
+/*
 extern crate tokio_core;
 extern crate tokio_io;
+#[cfg(unix)]
 extern crate tokio_uds;
+#[cfg(windows)]
+extern crate tokio_named_pipes;
 
 use std::{mem, thread, result};
 use std::collections::BTreeMap;
@@ -13,7 +16,10 @@ use std::sync::{self, atomic, Arc};
 use self::tokio_core::reactor;
 use self::tokio_io::AsyncRead;
 use self::tokio_io::io::{ReadHalf, WriteHalf};
+#[cfg(unix)]
 use self::tokio_uds::UnixStream;
+#[cfg(windows)]
+use self::tokio_named_pipes::NamedPipe ;
 
 use futures::{self, sink, Sink, Stream, Future};
 use futures::sync::{oneshot, mpsc};
@@ -82,12 +88,12 @@ impl Ipc {
     P: AsRef<Path>,
   {
     trace!("Connecting to: {:?}", path.as_ref());
-    let stream = UnixStream::connect(path, handle)?;
+    let stream = NamedPipe::new(path.as_ref().as_os_str(), handle)?;
     Self::with_stream(stream, handle)
   }
 
   /// Creates new IPC transport from existing `UnixStream` and `Handle`
-  fn with_stream(stream: UnixStream, handle: &reactor::Handle) -> Result<Self> {
+  fn with_stream(stream: NamedPipe, handle: &reactor::Handle) -> Result<Self> {
     let (read, write) = stream.split();
     let (write_sender, write_receiver) = mpsc::channel(1024);
     let pending = Arc::new(Mutex::new(BTreeMap::new()));
@@ -279,7 +285,7 @@ enum WriteState {
 /// Writing part of the IPC transport
 /// Awaits new requests using `mpsc::Receiver` and writes them to the socket.
 struct WriteStream {
-  write: WriteHalf<UnixStream>,
+  write: WriteHalf<NamedPipe>,
   incoming: mpsc::Receiver<Vec<u8>>,
   state: WriteState
 }
@@ -324,7 +330,7 @@ impl Future for WriteStream {
 /// Reading part of the IPC transport.
 /// Reads data on the socket and tries to dispatch it to awaiting requests.
 struct ReadStream {
-  read: ReadHalf<UnixStream>,
+  read: ReadHalf<NamedPipe>,
   pending: Arc<Mutex<BTreeMap<RequestId, Pending>>>,
   buffer: Vec<u8>,
   current_pos: usize,
@@ -430,12 +436,12 @@ mod tests {
     // given
     let mut eloop = tokio_core::reactor::Core::new().unwrap();
     let handle = eloop.handle();
-    let (server, client) = tokio_uds::UnixStream::pair(&handle).unwrap();
+    let (server, client) = tokio_named_pipes::NamedPipe::pair(&handle).unwrap();
     let ipc = Ipc::with_stream(client, &handle).unwrap();
 
     eloop.remote().spawn(move |_| {
       struct Task {
-        server: tokio_uds::UnixStream,
+        server: tokio_named_pipes::NamedPipe,
       }
 
       impl Future for Task {
@@ -472,12 +478,12 @@ mod tests {
     // given
     let mut eloop = tokio_core::reactor::Core::new().unwrap();
     let handle = eloop.handle();
-    let (server, client) = tokio_uds::UnixStream::pair(&handle).unwrap();
+    let (server, client) = tokio_named_pipes::NamedPipe::pair(&handle).unwrap();
     let ipc = Ipc::with_stream(client, &handle).unwrap();
 
     eloop.remote().spawn(move |_| {
       struct Task {
-        server: tokio_uds::UnixStream,
+        server: tokio_named_pipes::NamedPipe,
       }
 
       impl Future for Task {
@@ -513,3 +519,4 @@ mod tests {
     )));
   }
 }
+*/
