@@ -1,5 +1,5 @@
-//! IPC Transport for *nix
-/*
+//! IPC Transport 
+
 extern crate tokio_core;
 extern crate tokio_io;
 #[cfg(unix)]
@@ -423,8 +423,8 @@ impl ReadStream {
 #[cfg(test)]
 mod tests {
   extern crate tokio_core;
-  extern crate tokio_uds;
-
+  extern crate tokio_named_pipes;
+  
   use std::io::{Read, Write};
   use super::Ipc;
   use futures::{self, Future};
@@ -519,4 +519,3 @@ mod tests {
     )));
   }
 }
-*/

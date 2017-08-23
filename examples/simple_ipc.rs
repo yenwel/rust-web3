@@ -3,7 +3,7 @@ extern crate web3;
 use web3::futures::Future;
 
 fn main() {
-  /*let (_el, transport) = web3::transports::Ipc::new("./jsonrpc.ipc").unwrap();
+  let (_el, transport) = web3::transports::Ipc::new("./jsonrpc.ipc").unwrap();
   let web3 = web3::Web3::new(transport);
 
   println!("Calling accounts.");
@@ -12,5 +12,5 @@ fn main() {
 
   println!("Calling balance.");
   let balance = web3.eth().balance(0.into(), None).wait().unwrap();
-  println!("Balance: {}", balance);*/
+  println!("Balance: {}", balance);
 }
