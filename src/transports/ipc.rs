@@ -88,12 +88,47 @@ impl Ipc {
     P: AsRef<Path>,
   {
     trace!("Connecting to: {:?}", path.as_ref());
-    let stream = NamedPipe::new(path.as_ref().as_os_str(), handle)?;
+    if cfg!(windows) {
+      let stream = NamedPipe::new(path.as_ref().as_os_str(), handle)?;
+    } else
+    {      
+      let stream = UnixStream::connect(path, handle)?;
+    }
     Self::with_stream(stream, handle)
   }
 
   /// Creates new IPC transport from existing `UnixStream` and `Handle`
+  #[cfg(windows)]
   fn with_stream(stream: NamedPipe, handle: &reactor::Handle) -> Result<Self> {
+    let (read, write) = stream.split();
+    let (write_sender, write_receiver) = mpsc::channel(1024);
+    let pending = Arc::new(Mutex::new(BTreeMap::new()));
+
+    let r = ReadStream {
+      read,
+      pending: pending.clone(),
+      buffer: vec![],
+      current_pos: 0,
+    };
+
+    let w = WriteStream {
+      write,
+      incoming: write_receiver,
+      state: WriteState::WaitingForRequest,
+    };
+
+    handle.spawn(r);
+    handle.spawn(w);
+
+    Ok(Ipc {
+      id: atomic::AtomicUsize::new(1),
+      write_sender: Mutex::new(write_sender.wait()),
+      pending,
+    })
+  }
+
+  #[cfg(unix)]
+  fn with_stream(stream: UnixStream, handle: &reactor::Handle) -> Result<Self> {
     let (read, write) = stream.split();
     let (write_sender, write_receiver) = mpsc::channel(1024);
     let pending = Arc::new(Mutex::new(BTreeMap::new()));
@@ -285,7 +320,10 @@ enum WriteState {
 /// Writing part of the IPC transport
 /// Awaits new requests using `mpsc::Receiver` and writes them to the socket.
 struct WriteStream {
+  #[cfg(windows)]
   write: WriteHalf<NamedPipe>,
+  #[cfg(unix)]  
+  write: WriteHalf<UnixStream>,
   incoming: mpsc::Receiver<Vec<u8>>,
   state: WriteState
 }
@@ -330,7 +368,10 @@ impl Future for WriteStream {
 /// Reading part of the IPC transport.
 /// Reads data on the socket and tries to dispatch it to awaiting requests.
 struct ReadStream {
+  #[cfg(windows)]
   read: ReadHalf<NamedPipe>,
+  #[cfg(unix)]
+  read: ReadHalf<UnixStream>,
   pending: Arc<Mutex<BTreeMap<RequestId, Pending>>>,
   buffer: Vec<u8>,
   current_pos: usize,
@@ -421,10 +462,11 @@ impl ReadStream {
 }
 
 #[cfg(test)]
+#[cfg(windows)]
 mod tests {
   extern crate tokio_core;
   extern crate tokio_named_pipes;
-  
+
   use std::io::{Read, Write};
   use super::Ipc;
   use futures::{self, Future};
@@ -474,6 +516,7 @@ mod tests {
   }
 
   #[test]
+  #[cfg(unix)]
   fn should_handle_double_response() {
     // given
     let mut eloop = tokio_core::reactor::Core::new().unwrap();
@@ -484,6 +527,106 @@ mod tests {
     eloop.remote().spawn(move |_| {
       struct Task {
         server: tokio_named_pipes::NamedPipe,
+      }
+
+      impl Future for Task {
+        type Item = ();
+        type Error = ();
+        fn poll(&mut self) -> futures::Poll<(), ()> {
+          let mut data = [0; 2048];
+          // Read request
+          let read = self.server.read(&mut data).unwrap();
+          let request = String::from_utf8(data[0..read].to_vec()).unwrap();
+          assert_eq!(&request, r#"{"jsonrpc":"2.0","method":"eth_accounts","params":["1"],"id":1}{"jsonrpc":"2.0","method":"eth_accounts","params":["1"],"id":2}"#);
+
+          // Write response
+          let response = r#"{"jsonrpc":"2.0","id":1,"result":"x"}{"jsonrpc":"2.0","id":2,"result":"x"}"#;
+          self.server.write_all(response.as_bytes()).unwrap();
+          self.server.flush().unwrap();
+
+          Ok(futures::Async::Ready(()))
+        }
+      }
+
+      Task { server: server }
+    });
+
+    // when
+    let res1 = ipc.execute("eth_accounts", vec![rpc::Value::String("1".into())]);
+    let res2 = ipc.execute("eth_accounts", vec![rpc::Value::String("1".into())]);
+
+    // then
+    assert_eq!(eloop.run(res1.join(res2)), Ok((
+      rpc::Value::String("x".into()),
+      rpc::Value::String("x".into())
+    )));
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  extern crate tokio_core;
+  extern crate tokio_uds;
+
+  use std::io::{Read, Write};
+  use super::Ipc;
+  use futures::{self, Future};
+  use rpc;
+  use {Transport};
+
+  #[test]
+  fn should_send_a_request() {
+    // given
+    let mut eloop = tokio_core::reactor::Core::new().unwrap();
+    let handle = eloop.handle();
+    let (server, client) = tokio_uds::UnixStream::pair(&handle).unwrap();
+    let ipc = Ipc::with_stream(client, &handle).unwrap();
+
+    eloop.remote().spawn(move |_| {
+      struct Task {
+        server: tokio_uds::UnixStream,
+      }
+
+      impl Future for Task {
+        type Item = ();
+        type Error = ();
+        fn poll(&mut self) -> futures::Poll<(), ()> {
+          let mut data = [0; 2048];
+          // Read request
+          let read = self.server.read(&mut data).unwrap();
+          let request = String::from_utf8(data[0..read].to_vec()).unwrap();
+          assert_eq!(&request, r#"{"jsonrpc":"2.0","method":"eth_accounts","params":["1"],"id":1}"#);
+
+          // Write response
+          let response = r#"{"jsonrpc":"2.0","id":1,"result":"x"}"#;
+          self.server.write_all(response.as_bytes()).unwrap();
+          self.server.flush().unwrap();
+
+          Ok(futures::Async::Ready(()))
+        }
+      }
+
+      Task { server: server }
+    });
+
+    // when
+    let res = ipc.execute("eth_accounts", vec![rpc::Value::String("1".into())]);
+
+    // then
+    assert_eq!(eloop.run(res), Ok(rpc::Value::String("x".into())));
+  }
+
+  #[test]
+  fn should_handle_double_response() {
+    // given
+    let mut eloop = tokio_core::reactor::Core::new().unwrap();
+    let handle = eloop.handle();
+    let (server, client) = tokio_uds::UnixStream::pair(&handle).unwrap();
+    let ipc = Ipc::with_stream(client, &handle).unwrap();
+
+    eloop.remote().spawn(move |_| {
+      struct Task {
+        server: tokio_uds::UnixStream,
       }
 
       impl Future for Task {
